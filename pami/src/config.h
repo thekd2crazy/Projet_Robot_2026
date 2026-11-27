@@ -175,7 +175,7 @@ constexpr uint32_t MOTION_PERIOD_MS = 20;
 // puis l'étalonnage avec test_trajectoire (le glissement à l'arrêt grandit avec la vitesse).
 // Essai T015 fait (à 150 mm/s, la déviation reste, plus faible) : retour à 350 (D019). C'est aussi la
 // vitesse maximale du banc test_trajectoire (« v 150 » ou « v 350 » sans re-téléverser).
-constexpr float DRIVE_SPEED_MM_S = 350.0f;
+constexpr float DRIVE_SPEED_MM_S = 200.0f;
 // Vitesse de chaque roue pendant une rotation sur place (baissée de 120 à 90 mm/s).
 // Inchangée : un virage de 51° ne dure que 0,7 s, aller plus vite ferait surtout glisser le cap.
 constexpr float TURN_SPEED_MM_S = 90.0f;
@@ -184,7 +184,7 @@ constexpr float TURN_SPEED_MM_S = 90.0f;
 // Passée à 200 par l'équipe pendant les essais du 25/11, remise à 500 le 26/11 pour la mission douve :
 // à 200, le trajet dure environ 10,4 s, plus que les 9,5 s de mouvement du labo (arrêt avant la douve).
 // Si les roues patinent au démarrage, essayer 400.
-constexpr float MOTION_ACCEL_MM_S2 = 500.0f;
+constexpr float MOTION_ACCEL_MM_S2 = 400.0f;
 // En dessous de cette vitesse, les moteurs risquent de caler (zone morte) : on ne descend pas plus bas.
 constexpr float MOTION_MIN_SPEED_MM_S = 40.0f;
 // On considère la cible atteinte à moins de 3 mm (ligne droite) ou 2 mm d'arc de roue (rotation).
