@@ -42,15 +42,20 @@
 // - Pendant l'essai, toutes les 200 ms :
 //     [PID] t = 0.4 s | G cible  150 mesure  147 PWM   41 % | D cible  150 mesure  152 PWM   39 %
 // - Avec v : une ligne par cycle de 20 ms, à coller dans un tableur (séparateur ;) pour tracer
-//   les courbes :  CSV;t_ms;cibleG;mesureG;pwmG;cibleD;mesureD;pwmD
+//   les courbes :  CSV;t_ms;cibleG;brutG;mesureG;pwmG;cibleD;brutD;mesureD;pwmD
+//   (brut = mesure avant le filtre ; mesure = après le filtre, celle que voit le régulateur)
 // - À la fin, un BILAN par roue :
 //   - échelon : temps de montée à 90 %, dépassement, vitesse moyenne et erreur en régime établi,
 //     ondulation (min et max), PWM moyenne et part de la correction P + I dans cette PWM ;
 //   - escalier : la PWM de chaque palier, puis la zone morte et la pente mesurées, à reporter
 //     dans config.h.
 // - Mesure de vitesse : 1 tick = environ 0,1 mm. Sur un cycle de 20 ms, 1 tick d'écart = 5 mm/s.
-//   L'affichage et le bilan utilisent donc la moyenne des 3 dernières mesures (60 ms).
-//   Le régulateur, lui, reçoit la mesure brute de chaque cycle, comme en match.
+//   Comme en match (motion.cpp), la mesure passe par le filtre SpeedFilter (logic/speed_filter.h :
+//   médiane de 3, puis lissage SPEED_FILTER_ALPHA) avant d'aller au régulateur. L'affichage, le
+//   bilan et la détection de blocage utilisent cette même vitesse filtrée.
+//   Les courbes CSV donnent aussi la mesure brute (brutG, brutD) : on voit ce que le filtre enlève.
+// - Régler SPEED_FILTER_ALPHA : échelon (e) avec les courbes (v), à 1 puis à 0,6. Le bon réglage :
+//   la PWM tremble moins, sans dépassement ni temps de montée en plus (critères ci-dessous).
 //
 // PROTOCOLE
 //  1. Sur cales (k), « a » puis « e » : échelon à la vitesse de croisière (350 mm/s, D019). Puis « g » « e », et « d » « e ».
@@ -80,6 +85,7 @@
 #include "console.h"
 #include "encoders.h"
 #include "logic/speed_controller.h"
+#include "logic/speed_filter.h"
 #include "motor_driver.h"
 #include "wireless.h"
 
@@ -104,15 +110,17 @@ const char* const SLOPE_NAMES[2] = {"LEFT_MOTOR_PCT_PER_MM_S", "RIGHT_MOTOR_PCT_
 SpeedController controllers[2] = {
     SpeedController(LEFT_MOTOR_DEADBAND_PCT, LEFT_MOTOR_PCT_PER_MM_S),
     SpeedController(RIGHT_MOTOR_DEADBAND_PCT, RIGHT_MOTOR_PCT_PER_MM_S)};
+// Les mêmes filtres de vitesse que motion.cpp. Hors de WheelState : ils ne sont jamais remis à zéro
+// au début d'un essai, ils suivent la vraie roue en permanence (comme en match).
+SpeedFilter speedFilters[2];
 
 // État d'une roue pendant un essai, et ce qu'on mesure pour le bilan.
 struct WheelState {
   bool active = false;  // roue testée dans cet essai
   int32_t lastTicks = 0;
   int32_t startTicks = 0;
-  float measuredMmS = 0.0f;  // vitesse brute du dernier cycle : celle que reçoit le régulateur
-  float history[3] = {0.0f, 0.0f, 0.0f};  // 3 dernières mesures, pour l'affichage et le bilan
-  uint8_t historyIndex = 0;
+  float rawMmS = 0.0f;       // vitesse brute du dernier cycle (seulement pour les courbes CSV)
+  float measuredMmS = 0.0f;  // vitesse filtrée : celle que reçoit le régulateur, comme en match
   float targetMmS = 0.0f;
   float pct = 0.0f;
   uint32_t stallStartMs = 0;  // début d'une suspicion de roue bloquée (0 = aucune)
@@ -163,10 +171,6 @@ const char* modeName() {
   return onStands ? "SUR CALES" : "AU SOL (1000 mm max par essai)";
 }
 
-float smoothedMmS(const WheelState& w) {
-  return (w.history[0] + w.history[1] + w.history[2]) / 3.0f;
-}
-
 // Part « anticipation » de la PWM, avec la même formule que SpeedController.
 // Sert seulement à afficher ce que la correction P + I ajoute par-dessus.
 float feedForwardPct(int i, float targetMmS) {
@@ -198,6 +202,8 @@ void printSettings() {
                  " cycle %lu ms, PWM max %d %%\n",
                  SPEED_KP_PCT_PER_MM_S, SPEED_KI_PCT_PER_MM, SPEED_INTEGRAL_MAX_PCT,
                  (unsigned long)MOTION_PERIOD_MS, MOTOR_MAX_PWM_PCT);
+  Console.printf("[BANC] Filtre de vitesse : mediane de 3 + lissage SPEED_FILTER_ALPHA %.2f"
+                 " (1 = pas de lissage)\n", SPEED_FILTER_ALPHA);
   Console.printf("[BANC] Anticipation : gauche %.1f %% + %.3f %%/(mm/s) | droite %.1f %% + %.3f %%/(mm/s)\n",
                  DEADBAND_PCT[LEFT], PCT_PER_MM_S[LEFT], DEADBAND_PCT[RIGHT], PCT_PER_MM_S[RIGHT]);
   Console.printf("[BANC] Prochain essai : %s, %.0f mm/s, %s, %s\n", selectionName(), speedMmS,
@@ -261,7 +267,7 @@ bool isStalledTooLong(WheelState& w, uint32_t nowMs) {
 void accumulate(int i, uint32_t elapsedMs, int stairIndex) {
   WheelState& w = wheels[i];
   const float targetAbsMmS = fabsf(w.targetMmS);
-  const float alongMmS = direction * smoothedMmS(w);  // vitesse dans le sens commandé
+  const float alongMmS = direction * w.measuredMmS;  // vitesse dans le sens commandé
   const float pctAlong = direction * w.pct;
 
   if (test == TestKind::STAIRS) {
@@ -443,7 +449,7 @@ void startTest(TestKind kind, uint32_t nowMs) {
                    speedMmS, selectionName(), direction > 0.0f ? "en avant" : "en arriere", modeName());
   }
   if (csvOutput) {
-    Console.println("CSV;t_ms;cibleG;mesureG;pwmG;cibleD;mesureD;pwmD");
+    Console.println("CSV;t_ms;cibleG;brutG;mesureG;pwmG;cibleD;brutD;mesureD;pwmD");
   }
 }
 
@@ -461,16 +467,17 @@ void stopTest(const char* reason, uint32_t nowMs) {
 void printLiveLine(uint32_t elapsedMs) {
   Console.printf("[PID] t = %4.1f s | G cible %4.0f mesure %4.0f PWM %4.0f %% | D cible %4.0f mesure %4.0f"
                  " PWM %4.0f %%\n",
-                 elapsedMs / 1000.0f, wheels[LEFT].targetMmS, smoothedMmS(wheels[LEFT]),
-                 wheels[LEFT].pct, wheels[RIGHT].targetMmS, smoothedMmS(wheels[RIGHT]),
+                 elapsedMs / 1000.0f, wheels[LEFT].targetMmS, wheels[LEFT].measuredMmS,
+                 wheels[LEFT].pct, wheels[RIGHT].targetMmS, wheels[RIGHT].measuredMmS,
                  wheels[RIGHT].pct);
 }
 
 // Valeurs brutes, en entiers : un tableur français les lit sans problème de virgule.
 void printCsvLine(uint32_t elapsedMs) {
-  Console.printf("CSV;%lu;%ld;%ld;%ld;%ld;%ld;%ld\n", (unsigned long)elapsedMs,
-                 lroundf(wheels[LEFT].targetMmS), lroundf(wheels[LEFT].measuredMmS),
-                 lroundf(wheels[LEFT].pct), lroundf(wheels[RIGHT].targetMmS),
+  Console.printf("CSV;%lu;%ld;%ld;%ld;%ld;%ld;%ld;%ld;%ld\n", (unsigned long)elapsedMs,
+                 lroundf(wheels[LEFT].targetMmS), lroundf(wheels[LEFT].rawMmS),
+                 lroundf(wheels[LEFT].measuredMmS), lroundf(wheels[LEFT].pct),
+                 lroundf(wheels[RIGHT].targetMmS), lroundf(wheels[RIGHT].rawMmS),
                  lroundf(wheels[RIGHT].measuredMmS), lroundf(wheels[RIGHT].pct));
 }
 
@@ -483,10 +490,10 @@ void runCycle(uint32_t nowMs) {
   encoders::read(ticks[LEFT], ticks[RIGHT]);
   for (int i = 0; i < 2; i++) {
     WheelState& w = wheels[i];
-    w.measuredMmS = (dtS > 0.0f) ? (ticks[i] - w.lastTicks) * WHEEL_MM_PER_TICK[i] / dtS : 0.0f;
+    w.rawMmS = (dtS > 0.0f) ? (ticks[i] - w.lastTicks) * WHEEL_MM_PER_TICK[i] / dtS : 0.0f;
     w.lastTicks = ticks[i];
-    w.history[w.historyIndex] = w.measuredMmS;
-    w.historyIndex = (w.historyIndex + 1) % 3;
+    // Filtrée à chaque cycle, même hors essai, comme motion.cpp.
+    w.measuredMmS = speedFilters[i].update(w.rawMmS);
   }
 
   if (test == TestKind::NONE) {

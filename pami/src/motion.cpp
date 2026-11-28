@@ -6,6 +6,7 @@
 #include "console.h"
 #include "encoders.h"
 #include "logic/speed_controller.h"
+#include "logic/speed_filter.h"
 #include "logic/speed_profile.h"
 
 namespace motion {
@@ -35,6 +36,11 @@ uint32_t lastUpdateMs = 0;
 float profileSpeedMmS = 0.0f;  // vitesse voulue par le profil en trapèze
 SpeedController leftController(LEFT_MOTOR_DEADBAND_PCT, LEFT_MOTOR_PCT_PER_MM_S);
 SpeedController rightController(RIGHT_MOTOR_DEADBAND_PCT, RIGHT_MOTOR_PCT_PER_MM_S);
+// Vitesse mesurée filtrée de chaque roue (bruit de millis() et des ticks). Mise à jour à CHAQUE
+// cycle, même à l'arrêt, pour toujours suivre la vraie roue. Jamais remise à zéro entre deux
+// mouvements : resetRegulation() ne la touche pas.
+SpeedFilter leftSpeedFilter;
+SpeedFilter rightSpeedFilter;
 WheelCommand requested;  // {0, 0} : arrêt
 
 uint32_t stallStartMs = 0;  // début d'une suspicion de roue bloquée (0 = aucune)
@@ -134,9 +140,13 @@ void update(uint32_t nowMs, bool commandBlocked) {
   int32_t leftTicks = 0;
   int32_t rightTicks = 0;
   encoders::read(leftTicks, rightTicks);
-  // Chaque roue avec son propre nombre de mm par tick (D023).
-  const float leftMeasuredMmS = (leftTicks - lastLeftTicks) * LEFT_MM_PER_TICK / dtS;
-  const float rightMeasuredMmS = (rightTicks - lastRightTicks) * RIGHT_MM_PER_TICK / dtS;
+  // Chaque roue avec son propre nombre de mm par tick (D023), puis filtrée (logic/speed_filter.h).
+  // Tout le reste de motion (régulateur, blocage, arrêt complet) utilise la vitesse filtrée.
+  // L'odométrie, elle, lit les ticks : le filtre ne change rien à la position.
+  const float leftMeasuredMmS =
+      leftSpeedFilter.update((leftTicks - lastLeftTicks) * LEFT_MM_PER_TICK / dtS);
+  const float rightMeasuredMmS =
+      rightSpeedFilter.update((rightTicks - lastRightTicks) * RIGHT_MM_PER_TICK / dtS);
   lastLeftTicks = leftTicks;
   lastRightTicks = rightTicks;
   // Même à l'arrêt : si on pousse le PAMI, sa position change.

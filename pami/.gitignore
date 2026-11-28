@@ -3,3 +3,5 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+# Enregistrements du moniteur série (pio device monitor -f log2file), tracés par tools/plot_pid.py
+platformio-device-monitor-*.log

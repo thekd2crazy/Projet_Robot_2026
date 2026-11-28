@@ -224,6 +224,10 @@ constexpr float RIGHT_MOTOR_PCT_PER_MM_S = 0.198f; // T004 (essais : 0,197 / 0,1
 constexpr float SPEED_KP_PCT_PER_MM_S = 0.05f;  // 100 mm/s d'écart -> 5 % de PWM en plus
 constexpr float SPEED_KI_PCT_PER_MM = 0.3f;     // corrige l'écart qui dure (pente, frottements)
 constexpr float SPEED_INTEGRAL_MAX_PCT = 30.0f;  // l'intégrale ne peut pas « s'emballer »
+// Filtre de la vitesse mesurée (logic/speed_filter.h) : médiane de 3, puis lissage.
+// 1 = pas de lissage (médiane seule), 0,6 = environ 13 ms de retard en plus. 
+// avec test_pid (la PWM doit trembler moins, sans dépassement de consigne en plus).
+constexpr float SPEED_FILTER_ALPHA = 0.6f;
 // Ligne droite : si la roue gauche a parcouru 1 mm de plus que la droite, on la ralentit de
 // 5 mm/s et on accélère la droite d'autant. Même gain pour garder la rotation bien sur place.
 constexpr float HEADING_KP_MM_S_PER_MM = 5.0f;
