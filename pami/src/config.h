@@ -226,7 +226,21 @@ constexpr float SPEED_KI_PCT_PER_MM = 0.3f;     // corrige l'écart qui dure (pe
 constexpr float SPEED_INTEGRAL_MAX_PCT = 30.0f;  // l'intégrale ne peut pas « s'emballer »
 // Ligne droite : si la roue gauche a parcouru 1 mm de plus que la droite, on la ralentit de
 // 5 mm/s et on accélère la droite d'autant. Même gain pour garder la rotation bien sur place.
+// Ne sert plus qu'à la rotation sur place (garder la somme des deux distances nulle) : en ligne
+// droite, c'est le régulateur d'angle ci-dessous qui corrige le cap.
 constexpr float HEADING_KP_MM_S_PER_MM = 5.0f;
+
+// Régulateur d'angle en ligne droite (logic/heading_controller.h) : un PI, sans dérivée.
+// u_θ = Kp × erreur d'angle + intégrale ; roue droite = u_d + u_θ, roue gauche = u_d - u_θ.
+// Kp choisi pour faire exactement comme l'ancienne correction (5 mm/s par mm d'écart entre les roues) :
+// 1 mm d'écart = 1 / 101,6 rad = 0,564°, donc 5 / 0,564 = 8,9 mm/s par degré.
+constexpr float HEADING_KP_MM_S_PER_DEG = 8.9f;
+// 1° d'erreur qui dure 1 s -> 4 mm/s de correction en plus. PROVISOIRE, à régler au banc test_trajectoire.
+constexpr float HEADING_KI_MM_S_PER_DEG_S = 4.0f;
+// Anti-emballement : l'intégrale seule ne peut pas dépasser 40 mm/s de correction.
+constexpr float HEADING_INTEGRAL_MAX_MM_S = 40.0f;
+// Correction totale bornée : à 350 mm/s, une roue ne descend pas sous 250 mm/s pour corriger le cap.
+constexpr float HEADING_CORRECTION_MAX_MM_S = 100.0f;
 
 // Roue bloquée ou encodeur inversé : une roue qui reçoit au moins 35 % de PWM mais qui ne tourne pas
 // (ou tourne à l'envers) pendant 0,6 s. Le PAMI passe en FAULT et s'arrête.

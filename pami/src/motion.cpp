@@ -5,6 +5,7 @@
 #include "config.h"
 #include "console.h"
 #include "encoders.h"
+#include "logic/heading_controller.h"
 #include "logic/speed_controller.h"
 #include "logic/speed_profile.h"
 
@@ -35,6 +36,7 @@ uint32_t lastUpdateMs = 0;
 float profileSpeedMmS = 0.0f;  // vitesse voulue par le profil en trapèze
 SpeedController leftController(LEFT_MOTOR_DEADBAND_PCT, LEFT_MOTOR_PCT_PER_MM_S);
 SpeedController rightController(RIGHT_MOTOR_DEADBAND_PCT, RIGHT_MOTOR_PCT_PER_MM_S);
+HeadingController headingController;  // ligne droite : garde l'angle à 0 (PI, logic/heading_controller.h)
 WheelCommand requested;  // {0, 0} : arrêt
 
 uint32_t stallStartMs = 0;  // début d'une suspicion de roue bloquée (0 = aucune)
@@ -46,6 +48,7 @@ void resetRegulation() {
   profileSpeedMmS = 0.0f;
   leftController.reset();
   rightController.reset();
+  headingController.reset();
   requested = WheelCommand();
   stallStartMs = 0;
 }
@@ -179,10 +182,12 @@ void update(uint32_t nowMs, bool commandBlocked) {
       return;
     }
     profileSpeedMmS = nextProfileSpeed(profileSpeedMmS, remainingMm, cruiseSpeedMmS, dtS);
-    // Ligne droite : la roue qui a pris de l'avance ralentit, l'autre accélère.
-    const float correctionMmS = HEADING_KP_MM_S_PER_MM * (leftMm - rightMm);
-    leftTargetMmS = profileSpeedMmS - correctionMmS;
-    rightTargetMmS = profileSpeedMmS + correctionMmS;
+    // Ligne droite (contrôle polaire) : u_d = profil en trapèze, u_θ = régulateur d'angle (PI).
+    // Angle voulu : 0° (on garde le cap du début de la ligne). Droite = u_d + u_θ, gauche = u_d - u_θ.
+    const float headingDeg = headingFromWheelsDeg(leftMm, rightMm, WHEEL_BASE_MM);
+    const float headingCorrectionMmS = headingController.update(0.0f, headingDeg, dtS);
+    leftTargetMmS = profileSpeedMmS - headingCorrectionMmS;
+    rightTargetMmS = profileSpeedMmS + headingCorrectionMmS;
     // Jamais de roue en arrière en ligne droite (safety le refuserait).
     leftTargetMmS = fmaxf(leftTargetMmS, 0.0f);
     rightTargetMmS = fmaxf(rightTargetMmS, 0.0f);
